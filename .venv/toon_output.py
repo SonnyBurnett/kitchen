@@ -1,4 +1,6 @@
 
+from pathlib import Path
+
 from tabulate import tabulate
 import pandas as pd
 
@@ -6,16 +8,6 @@ import pandas as pd
 #
 # Te doen: een betere brief maken, waarbij ook duidelijk is hoe laat de koker zijn/haar gasten kan verwachten.
 #
-
-def vind_dieetwensen(adres, huizen):
-    # Klopt geen hout van! Neemt volgens mij het voorgerecht als het hoof- of nagerecht moet zijn.
-    house = next((h for h in huizen if h.adres == adres), None)
-    if house:
-        return(house.dieetwensen)  # Jan de Vries
-    else:
-        print("Niet gevonden")
-    return "niks"
-
 
 def vind_naam(adres, huizen):
     house = next((h for h in huizen if h.adres == adres), None)
@@ -47,25 +39,6 @@ def print_eters(huizen):
             gelukt = False
         tabel_schema.append([huis.get_naam(), huis.get_adres(), huis.get_gang(), huis.get_voorgerecht(),voor_eters,
                              huis.get_hoofdgerecht(), hoofd_eters, huis.get_nagerecht(), na_eters, huis.aantal_huizen, huis.aantal_eters])
-        print("Beste", huis.naam, huis.adres)
-        print("Jullie zijn geselecteerd voor het maken van het", huis.gang)
-        print("Jullie ontvangen", huis.aantal_eters, "personen")
-        if huis.gang == "voorgerecht":
-            #print("Jullie ontvangen", voor_eters)
-            for eter in voor_eters:
-                print("Opmerkingen", vind_dieetwensen(eter, huizen))
-        if huis.gang == "hoofdgerecht":
-            #print("Jullie ontvangen", hoofd_eters)
-            for eter in voor_eters:
-                print("Opmerkingen", vind_dieetwensen(eter, huizen))
-        if huis.gang == "nagerecht":
-            #print("Jullie ontvangen", na_eters)
-            for eter in voor_eters:
-                print("Opmerkingen", vind_dieetwensen(eter, huizen))
-        print("Voor het voorgerecht worden jullie om 17.00 uur verwacht op", huis.voorgerecht)
-        print("Voor het hoofdgerecht worden jullie om 18.30 uur verwacht op", huis.hoofdgerecht)
-        print("Voor het dessert worden jullie om 20.00 uur verwacht op", huis.nagerecht)
-        print()
         teller += 1
     return tabel_schema, gelukt
 
@@ -98,21 +71,77 @@ def wie_eet_nog_meer_mee(gang, ik, lijst_huizen):
 
 def afronden(lijst_na_nagerecht):
     schema_tabel, gelukt_hoofdgerecht = print_eters(lijst_na_nagerecht)
+    maak_email(lijst_na_nagerecht)
     print(tabulate(schema_tabel, headers="firstrow", tablefmt="grid"))
     with open('kitchenroulette_schema.txt', 'w') as f:
         f.write(tabulate(schema_tabel, headers="firstrow", tablefmt="grid"))
 
-def maak_email(lijst_na_nagerecht):
-    for huis in lijst_na_nagerecht:
-        print("Beste", huis.naam, huis.adres)
-        print("Jullie zijn geselecteerd voor het maken van het", huis.gang)
-        print("Jullie ontvangen", huis.aantal_eters, "personen")
-        for eter in huis.lijst_eters:
-            print("Dieetwensen en bijzonderheden", eter)
-        print("Voor het voorgerecht worden jullie om 17.00 uur verwacht op", huis.voorgerecht)
-        print("Voor het hoofdgerecht worden jullie om 18.30 uur verwacht op", huis.hoofdgerecht)
-        print("Voor het dessert worden jullie om 20.00 uur verwacht op", huis.nagerecht)
+# Hoe laat iedereen per gang verwacht wordt, en hoe de gang in het bericht heet.
+TIJDEN = {"voorgerecht": "17.00", "hoofdgerecht": "18.30", "nagerecht": "20.00"}
+NAAM_IN_BERICHT = {"voorgerecht": "voorgerecht", "hoofdgerecht": "hoofdgerecht", "nagerecht": "dessert"}
+
+# Dieetwensen die eigenlijk "niets bijzonders" betekenen, laten we weg.
+GEEN_WENSEN = {"", "geen", "geen bijzonderheden", "nvt", "n.v.t.", "-"}
+
+
+def gasten_van(koker, huizen):
+    """De huizen die bij deze koker de gang komen eten die hij kookt."""
+    return [h for h in huizen if h is not koker and getattr(h, koker.gang) == koker.adres]
+
+
+def maak_bericht(huis, huizen) -> str:
+    """Het persoonlijke bericht voor één huis, als tekst."""
+    regels = [f"Beste {huis.naam} ({huis.adres}),",
+              "",
+              f"Jullie zijn geselecteerd voor het maken van het {NAAM_IN_BERICHT[huis.gang]}.",
+              f"Jullie ontvangen {huis.aantal_eters} personen."]
+
+    # Wie er komt is een verrassing: daarom wel de wensen, maar niet de namen van de gasten.
+    wensen = [g.dieetwensen.strip() for g in gasten_van(huis, huizen)
+              if g.dieetwensen.strip().lower().rstrip(".") not in GEEN_WENSEN]
+    if wensen:
+        regels.append("Opmerkingen en dieetwensen van jullie gasten:")
+        regels += [f"  - {wens}" for wens in wensen]
+    else:
+        regels.append("Jullie gasten hebben geen bijzondere dieetwensen.")
+
+    regels.append("")
+    for gang in TIJDEN:
+        if gang != huis.gang:  # de eigen gang eten ze thuis
+            regels.append(f"Voor het {NAAM_IN_BERICHT[gang]} worden jullie om {TIJDEN[gang]} uur "
+                          f"verwacht op {getattr(huis, gang)}.")
+    return "\n".join(regels)
+
+
+BERICHTEN_MAP = "berichten"
+
+
+def bestandsnaam(adres: str) -> str:
+    """'Warder 174A' -> 'Warder_174A.txt' (alleen veilige tekens in de bestandsnaam)."""
+    veilig = "".join(t if t.isalnum() or t in "-." else "_" for t in adres.strip())
+    return f"{veilig}.txt"
+
+
+def maak_email(huizen, map_naam=BERICHTEN_MAP):
+    """Print het persoonlijke bericht voor ieder huis en sla het op als los bestand.
+
+    Ieder huis krijgt een eigen bestand in de map 'berichten', bijv. berichten/Warder_72.txt.
+    Oude berichten van een vorige run worden eerst opgeruimd.
+    """
+    map_pad = Path(map_naam)
+    map_pad.mkdir(exist_ok=True)
+    for oud in map_pad.glob("*.txt"):
+        try:
+            oud.unlink()
+        except OSError:
+            print(f"[WAARSCHUWING] Kan oud bericht {oud} niet verwijderen")
+
+    for huis in huizen:
+        bericht = maak_bericht(huis, huizen)
+        print(bericht)
         print()
+        (map_pad / bestandsnaam(huis.adres)).write_text(bericht + "\n", encoding="utf-8")
+    print(f"[INFO] {len(huizen)} berichten opgeslagen in de map '{map_pad}'")
 
 
 def maak_excel(huizen):
