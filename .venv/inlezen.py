@@ -22,7 +22,7 @@ import pandas as pd
 
 from huis import GANGEN, Huis
 
-STANDAARD_BESTAND = "roulette2025.xlsx"
+STANDAARD_BESTAND = "roulette2026najaar.xlsx"
 STANDAARD_BLAD = "Blad1"
 MAX_BEZOEKERS = 8
 
@@ -83,7 +83,12 @@ def _rij_naar_huis(rij: dict, fouten: list) -> Huis:
     if max_eters > MAX_BEZOEKERS:
         fouten.append(f"maxaantaleters is {max_eters}, maar het maximum is {MAX_BEZOEKERS}")
 
-    voorkeur = frozenset(g for g in GANGEN if _ja_nee(rij[g], g, fouten))
+    # Een lege gang-kolom telt als "N" (wil deze gang liever niet koken).
+    lege_gangen = [g for g in GANGEN if _is_leeg(rij[g])]
+    if lege_gangen:
+        print(f"[WAARSCHUWING] {adres}: kolom {', '.join(lege_gangen)} is leeg, telt als N")
+    voorkeur = frozenset(g for g in GANGEN
+                         if g not in lege_gangen and _ja_nee(rij[g], g, fouten))
     if not voorkeur:
         # Niemand wil "geen enkele gang" koken; we lezen dit als "geen voorkeur".
         voorkeur = frozenset(GANGEN)
@@ -170,7 +175,7 @@ def toon_samenvatting(huizen: list) -> None:
     for gang in GANGEN:
         aantal = sum(gang in h.voorkeur_gangen for h in huizen)
         print(f"[INFO]   wil {gang} koken: {aantal}")
-    print(f"[INFO]   groepen met kinderen: {sum(h.kids_mee for h in huizen)}, "
+    print(f"[INFO]   gezinnen met kinderen: {sum(h.kids_mee for h in huizen)}, "
           f"kinderen niet welkom bij: {sum(not h.kids_welkom for h in huizen)}")
 
 

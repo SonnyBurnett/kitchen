@@ -7,6 +7,8 @@ Regels:
   4. Huizen die kinderen meenemen gaan niet naar een huis waar kinderen niet welkom zijn.
   5. Twee huizen zitten hooguit één keer samen aan tafel, over alle drie de gangen.
   6. (Optioneel) Een kookhuis krijgt geen gast waarvoor het vorige keer ook kookte.
+  7. Ieder gezin met kinderen zit minstens één keer aan tafel met een ander gezin
+     met kinderen (als gast of als gastheer). Vervalt als er maar één zo'n gezin is.
 
 Werkwijze:
   - Eerst krijgt ieder huis een gang (zo gelijk mogelijk verdeeld, met voorkeuren).
@@ -124,6 +126,9 @@ class _Zoeker:
         self.ontmoet = [[0] * self.n for _ in range(self.n)]
         self.tafel = {}                                     # (gang, gast) -> koker
         self.open = {(g, i) for g in GANGEN for i in range(self.n) if gang_van[i] != g}
+        # Regel 7: gezinnen met kinderen moeten een ander gezin met kinderen treffen.
+        self.kids = {i for i in range(self.n) if huizen[i].kids_mee}
+        self.kids_regel = len(self.kids) >= 2
 
     # -- hulpfuncties --------------------------------------------------------
 
@@ -140,6 +145,40 @@ class _Zoeker:
         if self.ontmoet[gast][koker]:
             return False
         return not any(self.ontmoet[gast][andere] for andere in self.gasten_bij[koker])
+
+    def _tafel_heeft_kids(self, koker) -> bool:
+        return koker in self.kids or any(g in self.kids for g in self.gasten_bij[koker])
+
+    def _kids_tevreden(self, i) -> bool:
+        """Heeft gezin i al een ander gezin met kinderen ontmoet?"""
+        return any(self.ontmoet[i][j] for j in self.kids if j != i)
+
+    def _kids_nog_haalbaar(self, opties_per_open) -> bool:
+        """Kan ieder gezin met kinderen nog een ander gezin met kinderen treffen?
+
+        Ruime (optimistische) controle: als dit False geeft, kan het zeker niet meer.
+        """
+        if not self.kids_regel:
+            return True
+        # Tafels waar nog een gezin met kinderen bij kan komen: {(gang, koker)}.
+        kids_kan_nog_naar = {(gang, k) for (gang, j), opties in opties_per_open.items()
+                             if j in self.kids for k in opties}
+        for i in self.kids:
+            if self._kids_tevreden(i):
+                continue
+            # a) i is nog niet ingedeeld voor een gang en kan naar een tafel
+            #    met kinderen, of naar een tafel waar nog kinderen bij kunnen komen.
+            if any(gast == i and any(self._tafel_heeft_kids(k) or (gang, k) in kids_kan_nog_naar
+                                     for k in opties)
+                   for (gang, gast), opties in opties_per_open.items()):
+                continue
+            # b) Aan een tafel waar i al zit (als kok of gast) kan nog een gezin met kinderen komen.
+            tafels_van_i = [(self.gang_van[i], i)] + [(g, k) for (g, gast), k in self.tafel.items()
+                                                     if gast == i]
+            if any(t in kids_kan_nog_naar for t in tafels_van_i):
+                continue
+            return False
+        return True
 
     def _opties(self, gang, gast) -> list:
         return [k for k in self.kokers[gang] if self._past(gang, gast, k)]
@@ -184,7 +223,8 @@ class _Zoeker:
 
     def zoek(self) -> bool:
         if not self.open:
-            return all(self.gasten_bij[k] for g in GANGEN for k in self.kokers[g])
+            return (all(self.gasten_bij[k] for g in GANGEN for k in self.kokers[g]) and
+                    (not self.kids_regel or all(self._kids_tevreden(i) for i in self.kids)))
         self.stappen += 1
         if self.stappen > self.max_stappen:
             return False
@@ -192,12 +232,18 @@ class _Zoeker:
         opties_per_open = {p: self._opties(*p) for p in self.open}
         if not self._lege_tafels_nog_te_vullen(opties_per_open):
             return False
+        if not self._kids_nog_haalbaar(opties_per_open):
+            return False
 
         # De gast met de minste mogelijkheden eerst (bij gelijkspel: willekeurig).
         gang, gast = min(opties_per_open, key=lambda p: (len(opties_per_open[p]), self.rng.random()))
         opties = opties_per_open[(gang, gast)]
-        # Liefst naar een tafel met weinig gasten, zodat de tafels gelijkmatig vullen.
-        opties.sort(key=lambda k: (len(self.gasten_bij[k]), self.rng.random()))
+        # Een gezin met kinderen dat nog geen ander gezin met kinderen trof, gaat bij
+        # voorkeur naar een tafel met kinderen. Verder liefst naar een tafel met weinig
+        # gasten, zodat de tafels gelijkmatig vullen.
+        zoekt_kids = self.kids_regel and gast in self.kids and not self._kids_tevreden(gast)
+        opties.sort(key=lambda k: (not (zoekt_kids and self._tafel_heeft_kids(k)),
+                                   len(self.gasten_bij[k]), self.rng.random()))
 
         for koker in opties:
             self._zet(gang, gast, koker, +1)
@@ -249,6 +295,10 @@ def maak_schema(huizen: list, vorige_keer=None, seed=None,
         raise GeenSchemaGevonden(
             "De gangvoorkeuren laten geen gelijke verdeling over de drie gangen toe. "
             "Vraag een paar huizen of ze ook een andere gang willen koken.")
+
+    if sum(h.kids_mee for h in huizen) == 1:
+        print("[WAARSCHUWING] Er is maar één gezin met kinderen; de regel 'kinderen ontmoeten "
+              "elkaar' kan niet en wordt overgeslagen.")
 
     rng = random.Random(seed)
     verboden = _verboden_paren(huizen, vorige_keer)
@@ -327,5 +377,12 @@ def controleer_schema(huizen: list, vorige_keer=None) -> list:
     for (a, b), gangen in ontmoetingen.items():
         if len(gangen) > 1:
             fouten.append(f"{a} en {b} zitten vaker samen aan tafel ({', '.join(gangen)})")
+
+    met_kids = [h.adres for h in huizen if h.kids_mee]
+    if len(met_kids) >= 2:
+        for adres in met_kids:
+            if not any(tuple(sorted((adres, ander))) in ontmoetingen
+                       for ander in met_kids if ander != adres):
+                fouten.append(f"{adres} (met kinderen) ontmoet geen ander gezin met kinderen")
 
     return fouten

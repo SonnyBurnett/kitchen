@@ -27,6 +27,15 @@ def lees_argumenten():
     return parser.parse_args()
 
 
+def toon_kinderontmoetingen(huizen):
+    """Laat zien welke gezinnen met kinderen elkaar treffen."""
+    met_kids = {h.adres for h in huizen if h.kids_mee}
+    for h in huizen:
+        if h.kids_mee:
+            anderen = sorted(met_kids.intersection(h.lijst_eters))
+            print(f"[KIDS] {h.adres:<15} treft gezinnen met kinderen: {', '.join(anderen) or '-'}")
+
+
 def main():
     args = lees_argumenten()
 
@@ -46,6 +55,7 @@ def main():
     if fouten:  # zou niet moeten gebeuren; dan zit er een fout in de zoekcode
         sys.exit("[ERROR] Het gevonden schema klopt niet:\n  - " + "\n  - ".join(fouten))
     print("[INFO] Schema gecontroleerd: aan alle regels voldaan.")
+    toon_kinderontmoetingen(huizen)
 
     toon_output.afronden(huizen)
     toon_output.maak_excel(huizen)
